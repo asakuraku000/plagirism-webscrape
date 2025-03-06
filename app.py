@@ -1,10 +1,9 @@
-from flask import Flask
+from flask import Flask, request, jsonify
 import math
 import re
 import requests
 from collections import Counter
 from googlesearch import search
-from flask import request
 from bs4 import BeautifulSoup
 import os
 import json
@@ -12,7 +11,7 @@ import json
 app = Flask(__name__)
 
 
-@app.route('/')
+@app.route('/', methods=['GET'])
 def index():
     os.system('cls' if os.name == 'nt' else 'clear')
     query = request.args.get('data', default='*', type=str)
@@ -42,6 +41,39 @@ def index():
         obj["tags" + str(i)] = data1[2]
         i += 1
     return obj
+
+
+@app.route('/', methods=['POST'])
+def process_post():
+    # Get JSON data from request body
+    if request.is_json:
+        data = request.get_json()
+        query = data.get('data', '*')
+    else:
+        # Handle form data
+        query = request.form.get('data', '*')
+    
+    neko = query
+    print(f"POST request with query: {query}")
+    
+    find = hanap(query, neko)
+    
+    obj = dict()
+    i = 0
+    for data in find:
+        data1 = str(data)
+        data1 = data1.replace("[", "")
+        data1 = data1.replace("]", "")
+        data1 = data1.replace("(", "")
+        data1 = data1.replace(")", "")
+        data1 = data1.replace("'", "")
+        data1 = data1.split(",")
+        obj["link" + str(i)] = data1[0]
+        obj["score" + str(i)] = data1[1]
+        obj["tags" + str(i)] = data1[2]
+        i += 1
+    
+    return jsonify(obj)
 
 
 def hanap(query, neko):
@@ -138,4 +170,5 @@ def sim(a, b):
     return cosine
 
 
-app.run(host='0.0.0.0', port=80)
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=80)

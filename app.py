@@ -5,7 +5,7 @@ import concurrent.futures
 from collections import Counter
 from bs4 import BeautifulSoup
 from googlesearch import search
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, request, render_template_string
 
 app = Flask(__name__)
 
@@ -148,8 +148,7 @@ def index():
         
         if query:
             results = hanap(query, query)
-            
-    # Create HTML template as a string variable
+    
     html_template = '''
     <!DOCTYPE html>
     <html lang="en">
@@ -284,13 +283,6 @@ def index():
     '''
     
     return render_template_string(html_template, query=query, results=results)
-
-# Add the render_template_string function to avoid Flask dependency
-def render_template_string(template_string, **context):
-    # Simple template replacement
-    from jinja2 import Template
-    template = Template(template_string)
-    return template.render(**context)
 
 if __name__ == "__main__":
     app.run(debug=True)

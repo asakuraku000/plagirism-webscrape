@@ -152,7 +152,7 @@ def sim(a, b):
 
 # If running locally (not on PythonAnywhere), this will start the server
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True)
 
 # For PythonAnywhere compatibility
 application = app

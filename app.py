@@ -2,6 +2,9 @@ import math
 import re
 import requests
 from collections import Counter
+import nltk
+from nltk.tokenize import sent_tokenize
+from difflib import SequenceMatcher
 from bs4 import BeautifulSoup
 try:
     from googlesearch import search
@@ -11,6 +14,12 @@ except ImportError:
     def search(query, **kwargs):
         return ["https://example.com/fallback"]
 from flask import Flask, request, jsonify
+
+# Download NLTK data for sentence tokenization
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt')
 
 app = Flask(__name__)
 
@@ -45,12 +54,14 @@ def index():
     i = 0
     for data in find:
         # Extract data from tuple
-        link, score, tags = data
+        link, score, word_tags, longest_match, match_ratio = data
         
         # Add to response object
         obj["link" + str(i)] = link
         obj["score" + str(i)] = str(score)
-        obj["tags" + str(i)] = tags
+        obj["word_tags" + str(i)] = word_tags
+        obj["longest_match" + str(i)] = longest_match
+        obj["match_ratio" + str(i)] = str(match_ratio)
         i += 1
     
     # Return empty object if no results found
@@ -64,6 +75,54 @@ def ping():
     """Simple health check endpoint"""
     return "pong"
 
+def clean_text(text):
+    """Clean and normalize text for comparison"""
+    # Remove special characters and convert to lowercase
+    return re.sub('[^A-Za-z0-9]+', ' ', text.lower()).strip()
+
+def find_longest_matching_substring(text1, text2):
+    """Find the longest matching substring between two texts"""
+    matcher = SequenceMatcher(None, text1, text2)
+    match = matcher.find_longest_match(0, len(text1), 0, len(text2))
+    
+    if match.size > 5:  # Only consider matches with more than 5 characters
+        return text1[match.a:match.a + match.size], match.size / len(text1) if len(text1) > 0 else 0
+    return "", 0
+
+def find_matching_sentences(original_text, web_text, threshold=0.8):
+    """Find matching sentences between original text and web content"""
+    # Tokenize both texts into sentences
+    original_sentences = sent_tokenize(original_text)
+    web_sentences = sent_tokenize(web_text)
+    
+    matches = []
+    
+    # Compare each sentence from original text with each sentence from web text
+    for orig_sent in original_sentences:
+        orig_clean = clean_text(orig_sent)
+        if len(orig_clean) < 20:  # Skip very short sentences
+            continue
+            
+        for web_sent in web_sentences:
+            web_clean = clean_text(web_sent)
+            
+            # Calculate similarity ratio between sentences
+            similarity = SequenceMatcher(None, orig_clean, web_clean).ratio()
+            
+            if similarity >= threshold:
+                matches.append((orig_sent, web_sent, similarity))
+    
+    # Sort matches by similarity in descending order
+    matches.sort(key=lambda x: x[2], reverse=True)
+    
+    if matches:
+        # Return the most similar match
+        return matches[0][0], matches[0][2]
+    else:
+        # Find the longest matching substring as a fallback
+        substring, ratio = find_longest_matching_substring(clean_text(original_text), clean_text(web_text))
+        return substring, ratio
+
 def hanap(query, neko):
     """
     Search and analyze web pages based on the input query.
@@ -73,63 +132,88 @@ def hanap(query, neko):
         neko (str): Original query for comparison
 
     Returns:
-        list: A sorted list of tuples containing (link, similarity score, unique words)
+        list: A sorted list of tuples containing (link, similarity score, unique words, longest match, match ratio)
     """
     results = set()
 
     try:
-        # Search for web pages
-        for j in search(query, tld="co.in", num=6, stop=6, pause=1):
-            try:
-                response = requests.get(j)
-                print(f"Checking {j} - Status: {response.status_code}")
+        # Use more strategic search queries
+        search_queries = [
+            query,  # Original query
+            ' '.join(query.split()[:10]),  # First 10 words
+            ' '.join(query.split()[-10:])  # Last 10 words
+        ]
+        
+        processed_urls = set()
+        
+        for search_query in search_queries:
+            # Search for web pages
+            for j in search(search_query, tld="co.in", num=8, stop=8, pause=1):
+                if j in processed_urls:
+                    continue
                 
-                html = response.content
-                soup = BeautifulSoup(html, features="html.parser")
-
-                # Remove script and style elements
-                for script in soup(["script", "style"]):
-                    script.extract()
-
-                # Extract text from the webpage
-                text = soup.get_text()
-                lines = (line.strip() for line in text.splitlines())
-                chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-                text = ' '.join(chunk for chunk in chunks if chunk)
-
-                # Normalize query and text
-                q = re.sub('[^A-Za-z0-9]+', ' ', neko.lower())
-                t = re.sub('[^A-Za-z0-9]+', ' ', text.lower())
-
-                # Calculate similarity
-                list1 = q.split()
-                list2 = t.split()
-
-                names1 = [name1 for name1 in list1 if name1 not in list2]
-                cosine = sim(list1, list2)
-                common = " ".join(names1)
-                common = common.replace(",", " ")
-
-                # Add result to set
+                processed_urls.add(j)
+                
                 try:
-                    score = (j, cosine, common)
-                    results.add(score)
-                except Exception as e:
-                    print(f"Error adding result: {e}")
+                    response = requests.get(j, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+                    print(f"Checking {j} - Status: {response.status_code}")
+                    
+                    if response.status_code != 200:
+                        continue
+                    
+                    html = response.content
+                    soup = BeautifulSoup(html, features="html.parser")
 
-            except Exception as e:
-                print(f"Error processing {j}: {e}")
+                    # Remove script and style elements
+                    for script in soup(["script", "style"]):
+                        script.extract()
+
+                    # Extract text from the webpage
+                    text = soup.get_text()
+                    lines = (line.strip() for line in text.splitlines())
+                    chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+                    text = ' '.join(chunk for chunk in chunks if chunk)
+
+                    # Normalize query and text
+                    q = clean_text(neko)
+                    t = clean_text(text)
+
+                    # Calculate word-based similarity
+                    list1 = q.split()
+                    list2 = t.split()
+
+                    unique_words = [word for word in list1 if word not in list2]
+                    cosine = sim(list1, list2)
+                    unique_words_str = " ".join(unique_words)
+                    
+                    # Find longest matching sentences
+                    longest_match, match_ratio = find_matching_sentences(neko, text)
+
+                    # Add result to set if either cosine similarity or sentence match is high enough
+                    if cosine >= 0.5 or match_ratio >= 0.7:
+                        score = (j, cosine, unique_words_str, longest_match, match_ratio)
+                        results.add(score)
+
+                except Exception as e:
+                    print(f"Error processing {j}: {e}")
 
     except Exception as e:
         print(f"Search error: {e}")
 
-    # Sort results by similarity score in descending order
-    sorted_results = sorted(results, key=lambda x: x[1], reverse=True)
-
-    # Filter results to keep only those above 60% similarity and top 4
-    filtered_results = [result for result in sorted_results if result[1] >= 0.6][:4]
-
-    return filtered_results
+    # Convert set to list for sorting
+    results_list = list(results)
+    
+    # Calculate combined score that considers both word similarity and sentence matching
+    def combined_score(result):
+        word_sim = result[1]  # Cosine similarity
+        sent_match = result[4]  # Sentence match ratio
+        return 0.4 * word_sim + 0.6 * sent_match  # Weighted average
+    
+    # Sort results by combined score
+    sorted_results = sorted(results_list, key=combined_score, reverse=True)
+    
+    # Return top 5 results
+    return sorted_results[:5]
 
 def sim(a, b):
     """

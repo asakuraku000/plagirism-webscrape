@@ -3,35 +3,39 @@ import re
 import requests
 from collections import Counter
 from bs4 import BeautifulSoup
-from googlesearch import search
+try:
+    from googlesearch import search
+except ImportError:
+    print("Warning: googlesearch module not found. Using fallback.")
+    # Define a simple fallback function
+    def search(query, **kwargs):
+        return ["https://example.com/fallback"]
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-@app.route('/')
+@app.route('/', methods=['GET', 'POST'])
 def index():
     """
-    Handle GET requests with a 'data' parameter containing the text to check for plagiarism.
+    Handle both GET and POST requests with text to check for plagiarism.
     Returns JSON with similarity results.
     """
-    # Get query from request parameters
-    query = request.args.get('data', default='', type=str)
+    # Get query from request parameters or POST data
+    if request.method == 'POST':
+        # Handle POST request
+        if request.is_json:
+            data = request.get_json()
+            query = data.get('data', '')
+        else:
+            query = request.form.get('data', '')
+    else:
+        # Handle GET request
+        query = request.args.get('data', default='', type=str)
     
     if not query or query == '*':
-        return jsonify({"error": "No text provided. Please add ?data=your text to check"})
+        return jsonify({"error": "No text provided. Please add ?data=your text to check or POST data"})
     
     neko = query  # Keep original text
-    
-    # Optional: For very long texts, you can use a shorter version for search
-    # Commented out but kept from your original code
-    '''
-    if (len(query) >= 100):
-        query = query.split(" ")
-        key = ""
-        for i in range(0, 40):
-            key += query[i] + " "
-        query = key
-    '''
     
     # Perform the search and analysis
     find = hanap(query, neko)
@@ -54,6 +58,11 @@ def index():
         obj["message"] = "No similar content found above threshold"
     
     return jsonify(obj)
+
+@app.route('/ping')
+def ping():
+    """Simple health check endpoint"""
+    return "pong"
 
 def hanap(query, neko):
     """
@@ -150,9 +159,10 @@ def sim(a, b):
     cosine = dot / (len_a * len_b) if len_a * len_b != 0 else 0
     return cosine
 
-# If running locally (not on PythonAnywhere), this will start the server
+# If running locally or on Render, this will start the server
 if __name__ == '__main__':
+    import os
     app.run(debug=True)
 
-# For PythonAnywhere compatibility
+# For PythonAnywhere and other WSGI compatibility
 application = app

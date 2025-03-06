@@ -1,47 +1,30 @@
 from flask import Flask, request, jsonify
-import math
 import re
 import requests
+import nltk
+from nltk.tokenize import sent_tokenize
 from collections import Counter
 from googlesearch import search
 from bs4 import BeautifulSoup
 import os
-import json
 
 app = Flask(__name__)
 
+# Download NLTK data for sentence tokenization
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt')
 
 @app.route('/', methods=['GET'])
 def index():
     os.system('cls' if os.name == 'nt' else 'clear')
     query = request.args.get('data', default='*', type=str)
-    neko = query
-    '''if (len(query) >= 100):
-        #query = query.replace("the", "")
-        query = query.split(" ")
-        key = ""
-        for i in range(0, 40):
-            key += query[i] + " "
-        query = key'''
-    print(query)
-    find = hanap(query, neko)
-    #print(find)
-    obj = dict()
-    i = 0
-    for data in find:
-        data1 = str(data)
-        data1 = data1.replace("[", "")
-        data1 = data1.replace("]", "")
-        data1 = data1.replace("(", "")
-        data1 = data1.replace(")", "")
-        data1 = data1.replace("'", "")
-        data1 = data1.split(",")
-        obj["link" + str(i)] = data1[0]
-        obj["score" + str(i)] = data1[1]
-        obj["tags" + str(i)] = data1[2]
-        i += 1
-    return obj
-
+    print(f"GET request with query: {query}")
+    
+    results = search_by_sentence_chunks(query)
+    
+    return jsonify(results)
 
 @app.route('/', methods=['POST'])
 def process_post():
@@ -53,122 +36,128 @@ def process_post():
         # Handle form data
         query = request.form.get('data', '*')
     
-    neko = query
     print(f"POST request with query: {query}")
     
-    find = hanap(query, neko)
+    results = search_by_sentence_chunks(query)
     
-    obj = dict()
-    i = 0
-    for data in find:
-        data1 = str(data)
-        data1 = data1.replace("[", "")
-        data1 = data1.replace("]", "")
-        data1 = data1.replace("(", "")
-        data1 = data1.replace(")", "")
-        data1 = data1.replace("'", "")
-        data1 = data1.split(",")
-        obj["link" + str(i)] = data1[0]
-        obj["score" + str(i)] = data1[1]
-        obj["tags" + str(i)] = data1[2]
-        i += 1
+    return jsonify(results)
+
+def search_by_sentence_chunks(text):
+    # Split the text into sentences
+    sentences = sent_tokenize(text)
     
-    return jsonify(obj)
-
-
-def hanap(query, neko):
-    results = set()
-    # to search
-    for j in search(query, tld="co.in", num=6, stop=6, pause=1):
-        try:
-            response = requests.get(j)
-            print(response.status_code)
-            html = (response.content)
-            soup = BeautifulSoup(html, features="html.parser")
-            #name = j.replace(":", "@")
-            #name = name.replace("/", "AAAA")
-            # kill all script and style elements
-            for script in soup(["script", "style"]):
-                script.extract()  # rip it out
-
-            # get text
-            text = soup.get_text()
-            lines = (line.strip() for line in text.splitlines())
-            # break multi-headlines into a line each
-            chunks = (phrase.strip() for line in lines
-                      for phrase in line.split("  "))
-            # drop blank lines
-            text = ' '.join(chunk for chunk in chunks if chunk)
-            q = re.sub('[^A-Za-z0-9]+', ' ', neko.lower())
-            t = re.sub('[^A-Za-z0-9]+', ' ', text.lower())
-
-            #cosine = get_cosine(vector1, vector2)
-            #cosine = compute_similarity_and_diff(t.lower(), q.lower())
-
-            list1 = q.split(" ")
-            list2 = t.split(" ")
-
-            names1 = [name1 for name1 in list1 if name1 not in list2]
-            cosine = sim(list1, list2)
-            common = " ".join(names1)
-            common = common.replace(",", " ")
-            #print(common)
-            try:
-                #common = re.sub('[^A-Za-z0-9\ ]', ' ', common)
-                score = j, cosine, common
-                #print(score)
-                #print(results)
-                results.add(score)
-            except:
-                mahika = ""
-
-        except:
-            print("404")
+    # Group sentences into chunks of 5
+    sentence_chunks = [sentences[i:i+5] for i in range(0, len(sentences), 5)]
+    
+    results = {}
+    
+    for i, chunk in enumerate(sentence_chunks):
+        chunk_text = " ".join(chunk)
+        print(f"Searching for chunk {i+1}: {chunk_text[:50]}...")
+        
+        # Search for each chunk
+        chunk_results = search_web(chunk_text)
+        
+        if chunk_results:
+            # Take only the top result for each chunk
+            top_result = chunk_results[0]
+            
+            results[f"chunk_{i+1}"] = {
+                "sentences": chunk,
+                "search_result": {
+                    "link": top_result["link"],
+                    "similarity_score": top_result["similarity_score"],
+                    "missing_terms": top_result["missing_terms"]
+                }
+            }
+        else:
+            results[f"chunk_{i+1}"] = {
+                "sentences": chunk,
+                "search_result": {
+                    "link": "No results found",
+                    "similarity_score": 0,
+                    "missing_terms": ""
+                }
+            }
+    
     return results
 
+def search_web(query):
+    results = []
+    
+    # Perform Google search
+    try:
+        for j in search(query, tld="co.in", num=3, stop=3, pause=1):
+            try:
+                response = requests.get(j, timeout=5)
+                print(f"URL: {j}, Status code: {response.status_code}")
+                
+                if response.status_code == 200:
+                    html = response.content
+                    soup = BeautifulSoup(html, features="html.parser")
+                    
+                    # Remove script and style elements
+                    for script in soup(["script", "style"]):
+                        script.extract()
+                    
+                    # Extract text
+                    text = soup.get_text()
+                    lines = (line.strip() for line in text.splitlines())
+                    chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+                    text = ' '.join(chunk for chunk in chunks if chunk)
+                    
+                    # Clean and calculate similarity
+                    clean_query = re.sub('[^A-Za-z0-9]+', ' ', query.lower())
+                    clean_text = re.sub('[^A-Za-z0-9]+', ' ', text.lower())
+                    
+                    query_words = clean_query.split()
+                    page_words = clean_text.split()
+                    
+                    # Find missing terms
+                    missing_terms = [word for word in query_words if word not in page_words]
+                    
+                    # Calculate cosine similarity
+                    similarity_score = calculate_cosine_similarity(query_words, page_words)
+                    
+                    results.append({
+                        "link": j,
+                        "similarity_score": round(similarity_score, 3),
+                        "missing_terms": " ".join(missing_terms)
+                    })
+            except Exception as e:
+                print(f"Error processing URL {j}: {str(e)}")
+    except Exception as e:
+        print(f"Search error: {str(e)}")
+    
+    # Sort results by similarity score
+    results.sort(key=lambda x: x["similarity_score"], reverse=True)
+    
+    return results
 
-def lcs(S, T):
-    m = len(S)
-    n = len(T)
-    counter = [[0] * (n + 1) for x in range(m + 1)]
-    longest = 0
-    lcs_set = set()
-    for i in range(m):
-        for j in range(n):
-            if S[i] == T[j]:
-                c = counter[i][j] + 1
-                counter[i + 1][j + 1] = c
-                if c > longest:
-                    lcs_set = set()
-                    longest = c
-                    lcs_set.add(S[i - c + 1:i + 1])
-                elif c == longest:
-                    lcs_set.add(S[i - c + 1:i + 1])
-    return lcs_set
-
-
-def compute_similarity_and_diff(text1, text2):
-    from difflib import SequenceMatcher
-    s = SequenceMatcher(None, text2, text1)
-    return s.ratio()
-
-
-def sim(a, b):
-    # count word occurrences
+def calculate_cosine_similarity(a, b):
+    # Count word occurrences
     a_vals = Counter(a)
     b_vals = Counter(b)
-
-    # convert to word-vectors
+    
+    # Get unique words from both lists
     words = list(a_vals.keys() | b_vals.keys())
-    a_vect = [a_vals.get(word, 0) for word in words]  # [0, 0, 1, 1, 2, 1]
-    b_vect = [b_vals.get(word, 0) for word in words]  # [1, 1, 1, 0, 1, 0]
-
-    len_a = sum(av * av for av in a_vect)**0.5  # sqrt(7)
-    len_b = sum(bv * bv for bv in b_vect)**0.5  # sqrt(4)
-    dot = sum(av * bv for av, bv in zip(a_vect, b_vect))  # 3
+    
+    # Convert to word-vectors
+    a_vect = [a_vals.get(word, 0) for word in words]
+    b_vect = [b_vals.get(word, 0) for word in words]
+    
+    # Calculate dot product and magnitudes
+    dot = sum(av * bv for av, bv in zip(a_vect, b_vect))
+    len_a = sum(av * av for av in a_vect) ** 0.5
+    len_b = sum(bv * bv for bv in b_vect) ** 0.5
+    
+    # Avoid division by zero
+    if len_a == 0 or len_b == 0:
+        return 0
+    
+    # Calculate cosine similarity
     cosine = dot / (len_a * len_b)
     return cosine
 
-
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=80)
+    app.run(port=5000)

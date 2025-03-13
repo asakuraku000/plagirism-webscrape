@@ -11,7 +11,7 @@ CORS(app, supports_credentials=True)
 
 @app.route('/')
 def index():
-
+  
   cls()
   output = ""
   try:
@@ -26,7 +26,7 @@ def index():
           output.append(k)
   except:
     output = ""
-  return output
+  return output 
 
 
 def get_source(url):
@@ -97,4 +97,4 @@ def google_search(query):
 def cls():
     os.system('cls' if os.name=='nt' else 'clear')
 
-app.run(debug=False)
+app.run(port=5000)

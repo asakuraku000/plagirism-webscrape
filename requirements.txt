@@ -1,7 +1,6 @@
 flask
 gunicorn
 requests
-flask_cors
-requests-html
-requests
-lxml_html_clean
+beautifulsoup4
+numpy
+scikit-learn

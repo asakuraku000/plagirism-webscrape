@@ -5,8 +5,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import textwrap
 import time
-import json
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
@@ -158,17 +157,7 @@ def get_plagiarism_level(similarity):
         return ("NEGLIGIBLE", "Likely original content", "blue")
 
 def check_plagiarism(essay_text, api_key, cx):
-    """
-    Check an essay for plagiarism.
-    
-    Args:
-        essay_text (str): The essay text to check
-        api_key (str): Google API key
-        cx (str): Google Custom Search Engine ID
-    
-    Returns:
-        dict: Plagiarism check results
-    """
+    """Function to check plagiarism and return results in JSON format"""
     # Split the query if it's long (approximately 500 words per chunk)
     query_parts = split_long_query(essay_text)
     
@@ -177,9 +166,9 @@ def check_plagiarism(essay_text, api_key, cx):
     unique_links = set()
     
     # Process each query part
-    for i, part in enumerate(query_parts):
+    for part in enumerate(query_parts):
         # Search for this query part
-        search_results = google_search(part, api_key, cx, num=3)
+        search_results = google_search(part[1], api_key, cx, num=3)
         
         if not search_results:
             continue
@@ -191,7 +180,7 @@ def check_plagiarism(essay_text, api_key, cx):
                 all_results.append(result)
         
         # Add a small delay to avoid hitting API rate limits
-        if i < len(query_parts) - 1:
+        if part[0] < len(query_parts) - 1:
             time.sleep(1)
     
     # Process each unique result
@@ -223,10 +212,10 @@ def check_plagiarism(essay_text, api_key, cx):
         plagiarism_results.append({
             "title": result['title'],
             "link": result['link'],
-            "part_similarities": [float(sim) for sim in part_similarities],  # Ensure JSON serializable
-            "max_similarity": float(max_similarity),  # Ensure JSON serializable
+            "part_similarities": [float(sim) for sim in part_similarities],
+            "max_similarity": float(max_similarity),
             "max_similar_part": max_similar_part,
-            "avg_similarity": float(avg_similarity),  # Ensure JSON serializable
+            "avg_similarity": float(avg_similarity),
             "plagiarism_level": plagiarism_level,
             "description": description,
             "color": color
@@ -238,7 +227,7 @@ def check_plagiarism(essay_text, api_key, cx):
     if not plagiarism_results:
         return {
             "success": False,
-            "message": "No sources were successfully analyzed. Try again with different text."
+            "error": "No sources were successfully analyzed. Try again with different text."
         }
     
     # Calculate overall plagiarism score (weighted average of top 3)
@@ -255,268 +244,46 @@ def check_plagiarism(essay_text, api_key, cx):
     
     overall_level, overall_desc, overall_color = get_plagiarism_level(overall_score)
     
+    # Return the JSON results
     return {
         "success": True,
-        "essay_parts": len(query_parts),
-        "sources_analyzed": len(plagiarism_results),
         "overall_score": float(overall_score),
-        "overall_percentage": round(float(overall_score) * 100, 1),
+        "overall_percentage": float(overall_score * 100),
         "assessment": overall_level,
         "description": overall_desc,
         "color": overall_color,
-        "top_sources": plagiarism_results
+        "total_parts": len(query_parts),
+        "total_sources_found": len(all_results),
+        "total_sources_analyzed": len(plagiarism_results),
+        "sources": plagiarism_results
     }
 
-@app.route('/')
-def index():
-    """Render the home page with the submission form."""
-    return render_template('index.html')
-
-@app.route('/api/check-plagiarism', methods=['POST'])
+@app.route('/check-plagiarism', methods=['POST'])
 def api_check_plagiarism():
-    """API endpoint to check essay for plagiarism."""
-    # Get data from request
+    """API endpoint to check plagiarism"""
+    # Check if request has JSON data
+    if not request.is_json:
+        return jsonify({"success": False, "error": "Request must be JSON"}), 400
+    
     data = request.json
     
-    if not data or 'essay' not in data:
-        return jsonify({
-            "success": False,
-            "message": "Essay text is required."
-        }), 400
+    # Check if required fields are present
+    if 'essay' not in data:
+        return jsonify({"success": False, "error": "Missing required field: essay"}), 400
     
-    # Get essay text
-    essay_text = data['essay']
+    # Get API credentials
+    api_key = data.get('api_key', "AIzaSyDnMPyjZv76NaXXXJhsykc6BU7FP-gvdX8")
+    cx = data.get('cx', "4233ed3f6435f4486")
     
-    # API credentials
-    api_key = "AIzaSyDnMPyjZv76NaXXXJhsykc6BU7FP-gvdX8"  # Replace with your actual API key
-    cx = "4233ed3f6435f4486"  # Replace with your actual search engine ID
+    # Check plagiarism
+    result = check_plagiarism(data['essay'], api_key, cx)
     
-    # Check for plagiarism
-    results = check_plagiarism(essay_text, api_key, cx)
-    
-    return jsonify(results)
+    return jsonify(result)
 
-@app.route('/check', methods=['POST'])
-def check_essay():
-    """Web form submission handler to check essay for plagiarism."""
-    # Get essay text from form
-    essay_text = request.form.get('essay', '')
-    
-    if not essay_text:
-        return render_template('index.html', error="Essay text is required.")
-    
-    # API credentials
-    api_key = "AIzaSyDnMPyjZv76NaXXXJhsykc6BU7FP-gvdX8"  # Replace with your actual API key
-    cx = "4233ed3f6435f4486"  # Replace with your actual search engine ID
-    
-    # Check for plagiarism
-    results = check_plagiarism(essay_text, api_key, cx)
-    
-    if not results['success']:
-        return render_template('index.html', error=results['message'], essay=essay_text)
-    
-    return render_template('results.html', results=results, essay=essay_text)
-
-# Create templates directory and HTML templates
-@app.route('/templates/<path:path>')
-def serve_template(path):
-    with open(f'templates/{path}', 'r') as f:
-        return f.read()
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    return jsonify({"status": "ok"})
 
 if __name__ == "__main__":
-    # Create templates directory if it doesn't exist
-    import os
-    if not os.path.exists('templates'):
-        os.makedirs('templates')
-    
-    # Create index.html template
-    with open('templates/index.html', 'w') as f:
-        f.write('''<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Plagiarism Checker</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            line-height: 1.6;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-        h1 {
-            color: #333;
-        }
-        textarea {
-            width: 100%;
-            height: 300px;
-            padding: 10px;
-            font-family: inherit;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            margin-bottom: 20px;
-        }
-        button {
-            background-color: #4CAF50;
-            color: white;
-            padding: 10px 15px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 16px;
-        }
-        button:hover {
-            background-color: #45a049;
-        }
-        .error {
-            color: red;
-            margin-bottom: 20px;
-        }
-    </style>
-</head>
-<body>
-    <h1>Plagiarism Checker</h1>
-    <p>Paste your essay below to check for plagiarism.</p>
-    
-    {% if error %}
-    <div class="error">{{ error }}</div>
-    {% endif %}
-    
-    <form action="/check" method="post">
-        <textarea name="essay" placeholder="Enter your essay text here...">{{ essay if essay else '' }}</textarea>
-        <button type="submit">Check for Plagiarism</button>
-    </form>
-    
-    <p>You can also use our API by sending a POST request to <code>/api/check-plagiarism</code> with a JSON payload containing your essay text.</p>
-    <pre>
-{
-  "essay": "Your essay text here"
-}
-    </pre>
-</body>
-</html>''')
-    
-    # Create results.html template
-    with open('templates/results.html', 'w') as f:
-        f.write('''<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Plagiarism Check Results</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            line-height: 1.6;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-        h1, h2 {
-            color: #333;
-        }
-        .result-summary {
-            margin: 20px 0;
-            padding: 15px;
-            border-radius: 4px;
-        }
-        .CRITICAL {
-            background-color: #ffebee;
-            border-left: 5px solid #f44336;
-        }
-        .HIGH {
-            background-color: #fff3e0;
-            border-left: 5px solid #ff9800;
-        }
-        .MODERATE {
-            background-color: #fffde7;
-            border-left: 5px solid #ffeb3b;
-        }
-        .LOW {
-            background-color: #e8f5e9;
-            border-left: 5px solid #4caf50;
-        }
-        .NEGLIGIBLE {
-            background-color: #e3f2fd;
-            border-left: 5px solid #2196f3;
-        }
-        .source {
-            margin-bottom: 30px;
-            padding: 15px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-        }
-        .similarity-bar {
-            height: 20px;
-            background-color: #eee;
-            margin: 10px 0;
-            border-radius: 10px;
-            overflow: hidden;
-        }
-        .similarity-fill {
-            height: 100%;
-            border-radius: 10px;
-        }
-        .red { background-color: #f44336; }
-        .orange { background-color: #ff9800; }
-        .yellow { background-color: #ffeb3b; }
-        .green { background-color: #4caf50; }
-        .blue { background-color: #2196f3; }
-        .back-button {
-            display: inline-block;
-            background-color: #2196f3;
-            color: white;
-            padding: 10px 15px;
-            text-decoration: none;
-            border-radius: 4px;
-            margin-top: 20px;
-        }
-    </style>
-</head>
-<body>
-    <h1>Plagiarism Check Results</h1>
-    
-    <div class="result-summary {{ results.assessment }}">
-        <h2>Overall Assessment: {{ results.assessment }}</h2>
-        <p>{{ results.description }}</p>
-        <p>Overall similarity score: {{ results.overall_percentage }}%</p>
-        <div class="similarity-bar">
-            <div class="similarity-fill {{ results.color }}" style="width: {{ results.overall_percentage }}%;"></div>
-        </div>
-        <p>Essay was split into {{ results.essay_parts }} parts. {{ results.sources_analyzed }} sources were analyzed.</p>
-    </div>
-    
-    <h2>Top Matching Sources</h2>
-    
-    {% if results.top_sources %}
-        {% for source in results.top_sources %}
-            <div class="source">
-                <h3>{{ loop.index }}. {{ source.title }}</h3>
-                <p><strong>URL:</strong> <a href="{{ source.link }}" target="_blank">{{ source.link }}</a></p>
-                <p><strong>Similarity:</strong> {{ (source.max_similarity * 100) | round(1) }}% (in part {{ source.max_similar_part }})</p>
-                <div class="similarity-bar">
-                    <div class="similarity-fill {{ source.color }}" style="width: {{ (source.max_similarity * 100) | round(1) }}%;"></div>
-                </div>
-                <p><strong>Assessment:</strong> {{ source.plagiarism_level }} - {{ source.description }}</p>
-                
-                {% if source.part_similarities and source.part_similarities|length > 1 %}
-                    <h4>Part-by-part similarity:</h4>
-                    <ul>
-                        {% for sim in source.part_similarities %}
-                            <li>Part {{ loop.index }}: {{ (sim * 100) | round(1) }}%</li>
-                        {% endfor %}
-                    </ul>
-                {% endif %}
-            </div>
-        {% endfor %}
-    {% else %}
-        <p>No matching sources found.</p>
-    {% endif %}
-    
-    <a href="/" class="back-button">Check Another Essay</a>
-</body>
-</html>''')
-    
-    # Run the Flask app
-    app.run(debug=True)
+    app.run(debug=True, host='0.0.0.0', port=5000)

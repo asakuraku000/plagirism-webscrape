@@ -1,6 +1,6 @@
 flask
 gunicorn
 requests
-fask_cors
+flask_cors
 requests-html
 requests

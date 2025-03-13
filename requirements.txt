@@ -1,6 +1,6 @@
 flask
 gunicorn
 requests
-beautifulsoup4
-google
-nltk
+fask_cors
+requests-html
+requests
